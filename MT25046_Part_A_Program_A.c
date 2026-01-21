@@ -4,7 +4,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "workers.h"
+#include "MT25046_Part_B_Workers.h"
 
 static void run_worker(const char *worker, int id) {
     if (strcmp(worker, "cpu") == 0) cpu_worker(id);

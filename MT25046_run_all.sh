@@ -6,10 +6,10 @@ make clean
 make
 
 echo "Running measurements..."
-chmod +x measure.sh
-./measure.sh
+chmod +x MT25046_Part_C_Measure.sh
+./MT25046_Part_C_Measure.sh
 
 echo "Generating plots..."
-python3 plot_results.py
+python3 MT25046_Part_D_Plotter.py
 
 echo "✓ All done. Check measurements/ folder."
