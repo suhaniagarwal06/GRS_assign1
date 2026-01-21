@@ -7,11 +7,11 @@ mkdir -p "$OUTPUT_DIR"
 CSV_C="$OUTPUT_DIR/MT25046_Part_C_CSV.csv"
 CSV_D="$OUTPUT_DIR/MT25046_Part_D_CSV.csv"
 
-CPU_CORE=0
+CPU_CORE=2
 SAMPLE_INTERVAL=0.2
 
-echo "Program+Function,CPU%,Mem(MB),IO(MB/s)" > "$CSV_C"
-echo "Program+Function,NumWorkers,CPU%,Mem(MB),IO(MB/s)" > "$CSV_D"
+echo "Program+Function,CPU%,Mem(MB),IO(MB/s),Time(s)" > "$CSV_C"
+echo "Program+Function,NumWorkers,CPU%,Mem(MB),IO(MB/s),Time(s)" > "$CSV_D"
 
 # Recursively get all descendant PIDs
 get_tree_pids() {
@@ -79,61 +79,86 @@ run_one() {
 
     echo "Running $combo with $nworkers workers..."
 
+    # Start program pinned to CPU core
     taskset -c "$CPU_CORE" ./"$program" "$nworkers" "$worker" &
     local root_pid=$!
 
+    # Start time
+    local start_time
+    start_time=$(date +%s.%N)
+
     local cpu_sum=0
     local mem_sum=0
-    local io_sum=0
     local samples=0
 
-    local wb_prev
-    wb_prev=$(get_write_bytes_tree "$root_pid")
+    # IO: take initial total write bytes
+    local wb_start
+    wb_start=$(get_write_bytes_tree "$root_pid")
+    
+    local wb_end
+    wb_end=$wb_start
 
+    # Sample CPU and memory until program ends
     while kill -0 "$root_pid" 2>/dev/null; do
         read cpu rss_kb < <(sample_cpu_mem_tree "$root_pid")
 
         cpu_sum=$(awk -v a="$cpu_sum" -v b="$cpu" 'BEGIN{print a+b}')
         mem_sum=$(awk -v a="$mem_sum" -v b="$rss_kb" 'BEGIN{print a+b}')
         samples=$((samples+1))
+        
+        wb_end=$(get_write_bytes_tree "$root_pid")
 
-        local wb_now
-        wb_now=$(get_write_bytes_tree "$root_pid")
-
-        local delta_bytes=$((wb_now - wb_prev))
-        if [[ $delta_bytes -lt 0 ]]; then
-            delta_bytes=0
-        fi
-
-        local inst_io
-        inst_io=$(awk -v b="$delta_bytes" -v t="$SAMPLE_INTERVAL" \
-            'BEGIN{printf "%.6f", (b/(1024*1024))/t}')
-        io_sum=$(awk -v a="$io_sum" -v b="$inst_io" 'BEGIN{print a+b}')
-
-        wb_prev=$wb_now
         sleep "$SAMPLE_INTERVAL"
     done
 
+
     wait "$root_pid" 2>/dev/null || true
 
-    local avg_cpu avg_mem_mb avg_io
+    # End time
+    local end_time
+    end_time=$(date +%s.%N)
+
+    # Duration
+    local duration
+    duration=$(awk -v s="$start_time" -v e="$end_time" 'BEGIN{printf "%.3f", (e-s)}')
+
+    # Avoid division by zero
+    if awk "BEGIN{exit !($duration <= 0)}"; then
+        duration="0.001"
+    fi
+    
+    # IO bytes written
+    local written_bytes=$((wb_end - wb_start))
+    if [[ $written_bytes -lt 0 ]]; then
+        written_bytes=0
+    fi
+
+    # IO MB/s = total_written_MB / duration
+    local avg_io
+    avg_io=$(awk -v b="$written_bytes" -v t="$duration" \
+        'BEGIN{printf "%.2f", (b/(1024*1024))/t}')
+
+    # Averages for CPU and Mem
+    local avg_cpu avg_mem_mb
     if [[ $samples -gt 0 ]]; then
         avg_cpu=$(awk -v s="$cpu_sum" -v n="$samples" 'BEGIN{printf "%.2f", s/n}')
         avg_mem_mb=$(awk -v s="$mem_sum" -v n="$samples" 'BEGIN{printf "%.2f", (s/n)/1024}')
-        avg_io=$(awk -v s="$io_sum" -v n="$samples" 'BEGIN{printf "%.2f", s/n}')
     else
         avg_cpu="0.00"
         avg_mem_mb="0.00"
-        avg_io="0.00"
     fi
 
+    # Clamp CPU to 100%
+    avg_cpu=$(awk -v c="$avg_cpu" 'BEGIN{ if(c>100) printf "100.00"; else printf "%.2f", c }')
+
+    # Write CSV row
     if [[ "$include_nworkers" == "yes" ]]; then
-        echo "${combo},${nworkers},${avg_cpu},${avg_mem_mb},${avg_io}" >> "$out_csv"
+        echo "${combo},${nworkers},${avg_cpu},${avg_mem_mb},${avg_io},${duration}" >> "$out_csv"
     else
-        echo "${combo},${avg_cpu},${avg_mem_mb},${avg_io}" >> "$out_csv"
+        echo "${combo},${avg_cpu},${avg_mem_mb},${avg_io},${duration}" >> "$out_csv"
     fi
 
-    echo "DONE: CPU=${avg_cpu}% MEM=${avg_mem_mb}MB IO=${avg_io}MB/s"
+    echo "DONE: CPU=${avg_cpu}% MEM=${avg_mem_mb}MB IO=${avg_io}MB/s TIME=${duration}s"
     echo ""
 }
 
