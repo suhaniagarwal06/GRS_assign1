@@ -7,7 +7,7 @@ OUTDIR = "measurements/plots"
 os.makedirs(OUTDIR, exist_ok=True)
 
 def plot_part_c():
-    df = pd.read_csv("measurements/MT25xxx_Part_C_CSV.csv")
+    df = pd.read_csv("measurements/MT25046_Part_C_CSV.csv")
 
     for metric in ["CPU%", "Mem(MB)", "IO(MB/s)"]:
         plt.figure()
@@ -20,7 +20,7 @@ def plot_part_c():
         plt.close()
 
 def plot_part_d():
-    df = pd.read_csv("measurements/MT25xxx_Part_D_CSV.csv")
+    df = pd.read_csv("measurements/MT25046_Part_D_CSV.csv")
 
     for worker in ["cpu", "mem", "io"]:
         subA = df[df["Program+Function"] == f"A+{worker}"]

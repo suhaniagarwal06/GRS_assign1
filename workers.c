@@ -1,98 +1,108 @@
 #include "workers.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <unistd.h>
 #include <fcntl.h>
-#include <sys/stat.h>
+#include <string.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 
-/**
- * CPU-intensive worker:
- * Uses arithmetic operations that keep CPU busy (stable CPU load).
- */
+#define LOOPS 6000   // roll no 25046 => 6 * 10^3
+
+// ---------------- CPU WORKER ----------------
 void cpu_worker(int id) {
-    (void)id;
+    (void)id; // unused
 
-    volatile double x = 1.000001;
-    volatile double y = 1.0000001;
+    long total = LOOPS * 20000; // scale so CPU usage is visible
 
-    for (int i = 0; i < LOOP_COUNT * 5000; i++) {
-        x = x * 1.0000001 + y;
-        y = y * 0.9999999 + x;
-
-        if (x > 1e6) x = 1.000001;
-        if (y > 1e6) y = 1.0000001;
+    volatile double x = 0.0;
+    for (long i = 0; i < total; i++) {
+        x += (i % 97) * 0.000001;
+        x *= 1.0000001;
+        if (x > 1e9) x = 0.0;
     }
 }
 
-/**
- * Memory-intensive worker:
- * Allocates large memory ONCE and repeatedly touches it (bandwidth bound).
- */
+// ---------------- MEM WORKER ----------------
 void mem_worker(int id) {
     (void)id;
 
-    size_t bytes = 128UL * 1024 * 1024; // 128MB
-    char *buf = (char *)malloc(bytes);
+    size_t size_mb = 150; // safe for VM
+    size_t size = size_mb * 1024 * 1024;
 
+    char *buf = (char *)malloc(size);
     if (!buf) {
-        perror("malloc failed in mem_worker");
+        perror("malloc failed");
         return;
     }
 
-    memset(buf, 1, bytes);
+    // Touch pages to force RSS allocation
+    for (size_t i = 0; i < size; i += 4096) {
+        buf[i] = (char)(i % 256);
+    }
 
-    for (int i = 0; i < LOOP_COUNT * 50; i++) {
-        for (size_t j = 0; j < bytes; j += 64) { // cache-line stride
-            buf[j] = (char)(buf[j] + 1);
-        }
+    volatile uint64_t sum = 0;
+    long total = LOOPS * 5000;
+
+    for (long i = 0; i < total; i++) {
+        size_t idx = (size_t)(i * 4096) % size;
+        sum += (unsigned char)buf[idx];
+        buf[idx] = (char)(sum % 256);
+    }
+
+    if (sum == 123456789) {
+        printf("sum=%llu\n", (unsigned long long)sum);
     }
 
     free(buf);
 }
 
-/**
- * I/O-intensive worker:
- * Writes + fsync + reads large blocks to force real disk activity.
- */
+// ---------------- IO WORKER ----------------
 void io_worker(int id) {
-    char filename[256];
-    snprintf(filename, sizeof(filename), "io_worker_%d.tmp", id);
+    // Unique filename per worker
+    pid_t pid = getpid();
 
-    const size_t block_size = 4 * 1024 * 1024; // 4MB
-    char *buf = (char *)malloc(block_size);
+    char filename[128];
+    snprintf(filename, sizeof(filename), "iofile_%d_%d.bin", pid, id);
 
-    if (!buf) {
-        perror("malloc failed in io_worker");
-        return;
-    }
-
-    memset(buf, 'A' + (id % 26), block_size);
-
-    int fd = open(filename, O_CREAT | O_TRUNC | O_RDWR, 0644);
+    int fd = open(filename, O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (fd < 0) {
-        perror("open failed in io_worker");
-        free(buf);
+        perror("open failed");
         return;
     }
 
-    for (int i = 0; i < LOOP_COUNT; i++) {
-        ssize_t w = write(fd, buf, block_size);
-        if (w < 0) {
-            perror("write failed");
-            break;
+    size_t chunk = 4 * 1024 * 1024; // 4MB
+    char *buffer = (char *)malloc(chunk);
+    if (!buffer) {
+        perror("malloc buffer failed");
+        close(fd);
+        return;
+    }
+    memset(buffer, 'A', chunk);
+
+    size_t total_write = 100 * 1024 * 1024; // 100MB
+    int repeats = 4; // make IO visible
+
+    for (int r = 0; r < repeats; r++) {
+        size_t written = 0;
+        while (written < total_write) {
+            ssize_t w = write(fd, buffer, chunk);
+            if (w < 0) {
+                perror("write failed");
+                break;
+            }
+            written += (size_t)w;
         }
 
+        // Force disk IO (important!)
         fsync(fd);
         lseek(fd, 0, SEEK_SET);
-
-        ssize_t r = read(fd, buf, block_size);
-        if (r < 0) {
-            perror("read failed");
-            break;
-        }
-
-        lseek(fd, 0, SEEK_SET);
     }
 
+    free(buffer);
     close(fd);
-    remove(filename);
-    free(buf);
+
+    unlink(filename);
 }
+

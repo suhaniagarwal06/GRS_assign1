@@ -2,24 +2,40 @@
 set -e
 
 OUTPUT_DIR="measurements"
-LOG_DIR="${OUTPUT_DIR}/logs"
+mkdir -p "$OUTPUT_DIR"
 
-CSV_C="${OUTPUT_DIR}/MT25xxx_Part_C_CSV.csv"
-CSV_D="${OUTPUT_DIR}/MT25xxx_Part_D_CSV.csv"
+CSV_C="$OUTPUT_DIR/MT25046_Part_C_CSV.csv"
+CSV_D="$OUTPUT_DIR/MT25046_Part_D_CSV.csv"
 
 CPU_CORE=0
-SAMPLE_INTERVAL=0.2   # faster sampling so mem worker doesn't become 0
+SAMPLE_INTERVAL=0.2
 
-mkdir -p "${OUTPUT_DIR}" "${LOG_DIR}"
+echo "Program+Function,CPU%,Mem(MB),IO(MB/s)" > "$CSV_C"
+echo "Program+Function,NumWorkers,CPU%,Mem(MB),IO(MB/s)" > "$CSV_D"
 
-echo "Program+Function,CPU%,Mem(MB),IO(MB/s)" > "${CSV_C}"
-echo "Program+Function,NumWorkers,CPU%,Mem(MB),IO(MB/s)" > "${CSV_D}"
-
+# Recursively get all descendant PIDs
 get_tree_pids() {
     local root_pid=$1
-    echo "$root_pid $(pgrep -P "$root_pid" 2>/dev/null || true)"
+    local all="$root_pid"
+    local queue="$root_pid"
+
+    while [[ -n "$queue" ]]; do
+        local next=""
+        for p in $queue; do
+            local kids
+            kids=$(pgrep -P "$p" 2>/dev/null || true)
+            if [[ -n "$kids" ]]; then
+                next="$next $kids"
+                all="$all $kids"
+            fi
+        done
+        queue="$next"
+    done
+
+    echo "$all"
 }
 
+# Sample CPU% and RSS(KB) for all PIDs in tree
 sample_cpu_mem_tree() {
     local root_pid=$1
     local pids
@@ -31,6 +47,7 @@ sample_cpu_mem_tree() {
     '
 }
 
+# Sum write_bytes across all PIDs in tree
 get_write_bytes_tree() {
     local root_pid=$1
     local pids
@@ -67,14 +84,11 @@ run_one() {
 
     local cpu_sum=0
     local mem_sum=0
+    local io_sum=0
     local samples=0
 
-    # IO tracking
-    local wb_start wb_end
-    wb_start=$(get_write_bytes_tree "$root_pid")
-
-    local start_time
-    start_time=$(date +%s.%N)
+    local wb_prev
+    wb_prev=$(get_write_bytes_tree "$root_pid")
 
     while kill -0 "$root_pid" 2>/dev/null; do
         read cpu rss_kb < <(sample_cpu_mem_tree "$root_pid")
@@ -83,47 +97,43 @@ run_one() {
         mem_sum=$(awk -v a="$mem_sum" -v b="$rss_kb" 'BEGIN{print a+b}')
         samples=$((samples+1))
 
+        local wb_now
+        wb_now=$(get_write_bytes_tree "$root_pid")
+
+        local delta_bytes=$((wb_now - wb_prev))
+        if [[ $delta_bytes -lt 0 ]]; then
+            delta_bytes=0
+        fi
+
+        local inst_io
+        inst_io=$(awk -v b="$delta_bytes" -v t="$SAMPLE_INTERVAL" \
+            'BEGIN{printf "%.6f", (b/(1024*1024))/t}')
+        io_sum=$(awk -v a="$io_sum" -v b="$inst_io" 'BEGIN{print a+b}')
+
+        wb_prev=$wb_now
         sleep "$SAMPLE_INTERVAL"
     done
 
     wait "$root_pid" 2>/dev/null || true
 
-    local end_time
-    end_time=$(date +%s.%N)
-
-    wb_end=$(get_write_bytes_tree "$root_pid")
-
-    local duration
-    duration=$(awk -v s="$start_time" -v e="$end_time" 'BEGIN{print (e-s)}')
-    if awk "BEGIN{exit !($duration <= 0)}"; then
-        duration=0.001
-    fi
-
-    local avg_cpu avg_mem_mb
+    local avg_cpu avg_mem_mb avg_io
     if [[ $samples -gt 0 ]]; then
         avg_cpu=$(awk -v s="$cpu_sum" -v n="$samples" 'BEGIN{printf "%.2f", s/n}')
         avg_mem_mb=$(awk -v s="$mem_sum" -v n="$samples" 'BEGIN{printf "%.2f", (s/n)/1024}')
+        avg_io=$(awk -v s="$io_sum" -v n="$samples" 'BEGIN{printf "%.2f", s/n}')
     else
         avg_cpu="0.00"
         avg_mem_mb="0.00"
+        avg_io="0.00"
     fi
-
-    local written_bytes
-    written_bytes=$((wb_end - wb_start))
-    if [[ $written_bytes -lt 0 ]]; then
-        written_bytes=0
-    fi
-
-    local io_mbps
-    io_mbps=$(awk -v b="$written_bytes" -v t="$duration" 'BEGIN{printf "%.2f", (b/(1024*1024))/t}')
 
     if [[ "$include_nworkers" == "yes" ]]; then
-        echo "${combo},${nworkers},${avg_cpu},${avg_mem_mb},${io_mbps}" >> "$out_csv"
+        echo "${combo},${nworkers},${avg_cpu},${avg_mem_mb},${avg_io}" >> "$out_csv"
     else
-        echo "${combo},${avg_cpu},${avg_mem_mb},${io_mbps}" >> "$out_csv"
+        echo "${combo},${avg_cpu},${avg_mem_mb},${avg_io}" >> "$out_csv"
     fi
 
-    echo "DONE: CPU=${avg_cpu}% MEM=${avg_mem_mb}MB IO=${io_mbps}MB/s"
+    echo "DONE: CPU=${avg_cpu}% MEM=${avg_mem_mb}MB IO=${avg_io}MB/s"
     echo ""
 }
 
@@ -150,3 +160,4 @@ done
 echo "✓ CSV generated:"
 echo "  $CSV_C"
 echo "  $CSV_D"
+
