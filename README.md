@@ -1,8 +1,7 @@
 # Graduate Systems (CSE638) — PA01: Processes and Threads  
 **Roll Number:** 25046  
 **Student Name:** Suhani Agarwal  
-**GitHub Repo:** https://github.com/suhaniagarwal06/GRS_assign1  
-
+**GitHub Repo:** https://github.com/suhaniagarwal06/GRS_PA01
 ---
 
 ## 📌 Assignment Overview
