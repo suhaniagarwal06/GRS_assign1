@@ -37,10 +37,12 @@ This folder contains:
 - `MT25046_Part_C_Measure.sh` → Automated measurement script (Part C + Part D)
 - `MT25046_Part_D_Plotter.py` → Generates plots from CSV files
 - `MT25046_run_all.sh` → Runs build + measurements + plotting
-- `measurements/` → Generated CSV + plots  
+- **Generated Outputs (in current directory):**
   - `MT25046_Part_C_CSV.csv`
   - `MT25046_Part_D_CSV.csv`
-  - `plots/` (PNG plots)
+  - `MT25046_Part_C_Plot_*.png` (Plots for Part C)
+  - `MT25046_Part_D_Plot_*.png` (Plots for Part D)
+  - `iostat_log.txt` (IO debug log)
 
 ⚠️ **Note:** Executable binaries (`program_a`, `program_b`) are NOT included in GitHub submission as per instructions.
 
@@ -92,13 +94,13 @@ The script records:
 
 | Metric | Source |
 |-------|--------|
-| CPU% | `ps` sampling |
-| Mem(MB) | RSS from `ps` |
-| IO(MB/s) | `/proc/<pid>/io write_bytes` |
-| Time(s) | `date +%s.%N` duration |
+| CPU% | `top` sampling |
+| Mem(KB) | RSS from `top` |
+| IO(MB/s) | `iostat` (kB_wrtn/s) |
+| Time(s) | `/usr/bin/time` duration |
 
 Output CSV:
-- `measurements/MT25046_Part_C_CSV.csv`
+- `measurements/MT25046_Part_C_CSV.csv`(Saved in current directory)
 
 ---
 
@@ -111,11 +113,10 @@ Program B tested with workers:
 - **2, 3, 4, 5, 6, 7, 8 threads**
 
 Output CSV:
-- `measurements/MT25046_Part_D_CSV.csv`
+- `MT25046_Part_D_CSV.csv` (Saved in current directory)
 
 Plots generated in:
-- `measurements/plots/`
-
+- `MT25046_Part_D_Plot_*.png` (Saved in current directory)
 ---
 
 ## 🛠️ How to Run

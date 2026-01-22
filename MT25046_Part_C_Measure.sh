@@ -6,8 +6,6 @@ CSV_C="MT25046_Part_C_CSV.csv"
 CSV_D="MT25046_Part_D_CSV.csv"
 IO_LOG="iostat_log.txt"
 
-# Sampling Interval: 1 second as per assignment hint
-SAMPLE_INTERVAL=1
 # Pin to SINGLE core (Core 0) for strict comparison
 CPU_PIN="0"
 
@@ -16,7 +14,7 @@ echo "Program+Function,CPU%,Mem(KB),IO(MB/s),Time(s)" > "$CSV_C"
 echo "Program+Function,NumWorkers,CPU%,Mem(KB),IO(MB/s),Time(s)" > "$CSV_D"
 echo "=== IOSTAT LOG ===" > "$IO_LOG"
 
-# Recursively get all descendant PIDs
+# Recursively get all descendant PIDs (Needed for TOP command only now)
 get_tree_pids() {
     local root_pid=$1
     local all="$root_pid"
@@ -37,23 +35,6 @@ get_tree_pids() {
     echo "$all"
 }
 
-# Function to get IO Bytes (Write) from /proc (Reliable per-process)
-get_write_bytes_tree() {
-    local root_pid=$1
-    local pids
-    pids=$(get_tree_pids "$root_pid")
-
-    local total=0
-    for p in $pids; do
-        if [[ -r "/proc/$p/io" ]]; then
-            local wb
-            wb=$(grep "^write_bytes:" "/proc/$p/io" | awk '{print $2}')
-            total=$((total + wb))
-        fi
-    done
-    echo "$total"
-}
-
 run_one() {
     local program=$1
     local nworkers=$2
@@ -71,7 +52,6 @@ run_one() {
     echo "Running $combo with $nworkers workers (Pinning to Core $CPU_PIN)..."
 
     # 1. EXECUTION TIME: Use /usr/bin/time as asked
-    # Fixed: taskset -c 0 (Single Core)
     /usr/bin/time -f "%e" -o temp_time.txt taskset -c "$CPU_PIN" ./"$program" "$nworkers" "$worker" &
     local root_pid=$!
 
@@ -80,10 +60,6 @@ run_one() {
     local io_sum=0
     local samples=0
 
-    # IO baseline
-    local wb_prev
-    wb_prev=$(get_write_bytes_tree "$root_pid")
-
     # Loop while process is running
     while kill -0 "$root_pid" 2>/dev/null; do
         # 2. CPU/MEM MEASUREMENT: Use 'top' as asked
@@ -91,7 +67,6 @@ run_one() {
         tree_pids=$(get_tree_pids "$root_pid")
         
         # Parse top output for all related PIDs
-        # FIX: Added '|| true' to prevent script crash if grep finds nothing
         local top_out
         top_out=$(top -b -n 1 -p $(echo $tree_pids | tr ' ' ',') 2>/dev/null | grep -E "^ *[0-9]+" || true)
 
@@ -104,24 +79,33 @@ run_one() {
 
         cpu_sum=$(awk -v a="$cpu_sum" -v b="$current_cpu" 'BEGIN{print a+b}')
         mem_sum=$(awk -v a="$mem_sum" -v b="$current_mem" 'BEGIN{print a+b}')
+        
+        # 3. IO MEASUREMENT: Use 'iostat' as asked
+        # We run iostat for 1 second (2 reports). We grab the SECOND report (actual stats for this second).
+        # We save it to a temp file to parse it AND log it.
+        iostat -d -k 1 2 > temp_iostat_capture.txt 2>/dev/null || true
+
+        # Append to the log (Observation requirement)
+        echo "--- $combo ($nworkers) Sample $((samples+1)) ---" >> "$IO_LOG"
+        cat temp_iostat_capture.txt >> "$IO_LOG"
+
+        # Parse the 'kB_wrtn/s' (Column 4) from the 2nd report
+        # We look for the second occurrence of "Device" and sum column 4 for all devices following it.
+        local current_io_kb
+        current_io_kb=$(awk '
+            /^Device/ {count++} 
+            count==2 && !/^Device/ && NF>=4 {sum += $4} 
+            END {print sum+0}
+        ' temp_iostat_capture.txt)
+
+        # Convert KB/s to MB/s
+        local inst_io
+        inst_io=$(awk -v k="$current_io_kb" 'BEGIN {printf "%.6f", k/1024}')
+        
+        io_sum=$(awk -v a="$io_sum" -v b="$inst_io" 'BEGIN{print a+b}')
         samples=$((samples+1))
 
-        # 3. IO MEASUREMENT (Internal calculation)
-        local wb_now
-        wb_now=$(get_write_bytes_tree "$root_pid")
-        local delta_bytes=$((wb_now - wb_prev))
-        [ $delta_bytes -lt 0 ] && delta_bytes=0
-        
-        local inst_io
-        inst_io=$(awk -v b="$delta_bytes" -v t="$SAMPLE_INTERVAL" 'BEGIN{printf "%.6f", (b/(1024*1024))/t}')
-        io_sum=$(awk -v a="$io_sum" -v b="$inst_io" 'BEGIN{print a+b}')
-        wb_prev=$wb_now
-
-        # 4. COMPLIANCE: Run iostat and log it
-        echo "--- $combo ($nworkers) Sample $samples ---" >> "$IO_LOG"
-        iostat -d -k 1 1 >> "$IO_LOG" 2>/dev/null || true
-
-        sleep "$SAMPLE_INTERVAL"
+        # No 'sleep' needed here! iostat took 1 second to run.
     done
 
     # Wait for completion
@@ -136,6 +120,7 @@ run_one() {
         duration="0.00"
     fi
 
+    # Calculate Averages
     local avg_cpu avg_mem avg_io
     if [[ $samples -gt 0 ]]; then
         avg_cpu=$(awk -v s="$cpu_sum" -v n="$samples" 'BEGIN{printf "%.2f", s/n}')
@@ -147,7 +132,7 @@ run_one() {
         avg_io="0.00"
     fi
 
-    # Clamp CPU to 100%
+    # Clamp CPU to 100% (visual fix)
     avg_cpu=$(awk -v c="$avg_cpu" 'BEGIN{ if(c>100) printf "100.00"; else printf "%.2f", c }')
 
     if [[ "$include_nworkers" == "yes" ]]; then
@@ -158,6 +143,9 @@ run_one() {
 
     echo "DONE: CPU=${avg_cpu}% MEM=${avg_mem}KB IO=${avg_io}MB/s TIME=${duration}s"
     echo ""
+    
+    # Cleanup temp file
+    rm -f temp_iostat_capture.txt
 }
 
 echo "===== PART C ====="
