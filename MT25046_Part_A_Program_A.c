@@ -6,6 +6,13 @@
 
 #include "MT25046_Part_B_Workers.h"
 
+/**
+ * Executes the specified worker function in a child process
+ * 
+ * worker: Type of worker ("cpu", "mem", or "io")
+ * id: Worker identifier for unique file naming
+ */
+
 static void run_worker(const char *worker, int id) {
     if (strcmp(worker, "cpu") == 0) cpu_worker(id);
     else if (strcmp(worker, "mem") == 0) mem_worker(id);
@@ -16,7 +23,13 @@ static void run_worker(const char *worker, int id) {
     }
 }
 
+/**
+ * Main function - creates N child processes using fork()
+ * Parent process waits for all children to complete
+ */
+
 int main(int argc, char *argv[]) {
+    // Validate command-line arguments
     if (argc != 3) {
         fprintf(stderr, "Usage: %s <num_processes> <cpu|mem|io>\n", argv[0]);
         return 1;
@@ -24,7 +37,8 @@ int main(int argc, char *argv[]) {
 
     int n = atoi(argv[1]);
     const char *worker = argv[2];
-
+  // Validate number of processes
+  
     if (n <= 0) {
         fprintf(stderr, "num_processes must be > 0\n");
         return 1;

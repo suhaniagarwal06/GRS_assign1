@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 OUTDIR = "measurements/plots"
 os.makedirs(OUTDIR, exist_ok=True)
 
+
 def plot_part_c():
     df = pd.read_csv("measurements/MT25046_Part_C_CSV.csv")
 
