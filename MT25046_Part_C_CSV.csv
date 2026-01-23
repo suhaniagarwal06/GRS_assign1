@@ -1,4 +1,4 @@
-Program+Function,CPU%,Mem(MB),IO(MB/s),Time(s)
+Program+Function,CPU%,Mem(KB),IO(MB/s),Time(s)
 A+cpu,100.00,3428,0.00,1.64
 A+mem,81.90,311148,0.00,0.64
 A+io,30.00,13008,272.03,0.36

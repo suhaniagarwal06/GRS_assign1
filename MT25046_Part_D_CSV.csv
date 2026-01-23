@@ -1,4 +1,4 @@
-Program+Function,NumWorkers,CPU%,Mem(MB),IO(MB/s),Time(s)
+Program+Function,NumWorkers,CPU%,Mem(KB),IO(MB/s),Time(s)
 A+cpu,2,90.00,3412,0.00,1.62
 A+mem,2,100.00,311124,0.00,0.65
 A+io,2,0.00,13040,200.07,0.33
